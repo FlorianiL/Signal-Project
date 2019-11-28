@@ -10,6 +10,8 @@ from numpy.fft import fft,ifft
 from scipy.fftpack import dct
 from scipy.signal import find_peaks,lfilter
 from scipy.io.wavfile import read
+from lpc import lpc_ref as lpc
+
 
 # II Signal Pre-Processing
 # Ex 1
@@ -20,10 +22,10 @@ def normalize(signal) :
 
 # Ex 2
 
-def split(signal, samplerate, frame_size_ms, frame_step_ms) :
+def split(signal, sample_rate, frame_size_ms, frame_step_ms) :
     signal = np.array(signal)
-    frame_size = int(frame_size_ms*samplerate/1000)
-    frame_step = int(frame_step_ms*samplerate/1000)
+    frame_size = int(frame_size_ms*sample_rate/1000)
+    frame_step = int(frame_step_ms*sample_rate/1000)
     frames = []
     for i in range(0,len(signal)-len(signal)%frame_size, frame_step):
         frames.append(signal[i:i+frame_size])
@@ -46,6 +48,8 @@ def mono(signal):
 		return signal
 	else:
 		return signal.sum(axis=1)/2
+
+
 	# Main method
 def autocorrelation1(audiopath):
 	# Initialisation
@@ -106,3 +110,82 @@ def autocorrelation1(audiopath):
 			f_zeros.append(0)
 
 	return f_zeros
+
+
+    # 2 Cepstrum-Based Pitch Estimation System
+def cepstrum(audiopath):
+
+	sample_rate, samples_int = read(audiopath)
+	samples = np.array(samples_int)
+
+	samples = mono(samples)
+
+	treshold = 2.5
+	width = 30
+	step = 10
+
+	normalized = normalize(samples)
+
+	frames = split(normalized, sample_rate, width, step)
+
+	energy = []
+	for i in range(len(frames)) :
+		energy.append(compute_energy(frames[i]))
+
+	to_study = np.array(np.zeros(len(energy)))
+	for i in range(len(frames)) :
+		if energy[i]>treshold :
+			to_study[i] = 1
+	
+	cepstrums = []
+	for i in range(len(frames)):
+		if to_study[i]==1:
+			frame=frames[i]
+			fft_frame=fft(frame)
+			log_frame=np.log(np.abs(fft_frame))
+			ifft_frame=ifft(log_frame)
+			cepstrums.append(ifft_frame.real)
+		else:
+			cepstrums.append(0)
+	return cepstrums
+
+    # 3 Formants
+def formants(audiopath):
+
+	sample_rate, samples_int = read(audiopath)
+	samples = np.array(samples_int)
+
+	width = 30
+	step = 10
+
+	frames = split(samples, sample_rate, width, step)
+
+	filtered_frames = []
+	for frame in frames:
+		filtered_frames.append(lfilter([1],[1., 0.67],frame))
+
+	windowed_frames = []
+	for filtered_frame in filtered_frames:
+		windowed_frames.append(filtered_frame*np.hamming(len(filtered_frame)))
+
+	frames_LPC=[]
+	ncoeff = int(2 + sample_rate / 1000)
+	for windowed_frame in windowed_frames:
+		a = lpc(windowed_frame, ncoeff)
+		frames_LPC.append(a)
+
+	frames_roots = []
+	for frame_LPC_coeficient_A in frames_LPC:
+		frame_roots = np.roots(frame_LPC_coeficient_A)
+		frame_roots = [r for r in frame_roots if np.imag(r) >= 0]
+		frames_roots.append(frame_roots)
+
+	frames_angles = []
+	for frame_roots in frames_roots:
+		frames_angles.append(np.arctan2(np.imag(frame_roots), np.real(frame_roots)))
+
+	formants = []
+	for frame_angles in frames_angles:
+		formants.append(sorted(frame_angles*(sample_rate/(2*math.pi))))
+
+	return formants
